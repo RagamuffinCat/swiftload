@@ -1,0 +1,130 @@
+plugins {
+    id 'multiloader-loader'
+    id 'net.fabricmc.fabric-loom'
+}
+
+dependencies {
+    minecraft("com.mojang:minecraft:${minecraft_version}")
+    implementation("net.fabricmc:fabric-loader:${fabric_loader_version}")
+    // No Fabric API on purpose
+
+    // Tests run inside Knot (fabric-loader-junit), so the mixins apply
+    testImplementation("net.fabricmc:fabric-loader-junit:${fabric_loader_version}")
+    testImplementation(platform('org.junit:junit-bom:5.14.4'))
+    testImplementation('org.junit.jupiter:junit-jupiter')
+    testRuntimeOnly('org.junit.platform:junit-platform-launcher')
+}
+
+// Game tests, shared with :neoforge
+sourceSets.test.java.srcDir(project(':common').file('src/gametest/java'))
+
+tasks.named('test', Test) {
+    useJUnitPlatform()
+    // Otherwise C2 replaces hot implicit exceptions with ones without a message
+    jvmArgs('--enable-native-access=ALL-UNNAMED', '-XX:-OmitStackTraceInFastThrow')
+    maxHeapSize = '3G'
+    // Knot's game dir is the working dir
+    def runDir = layout.buildDirectory.dir('junit-run').get().asFile
+    workingDir = runDir
+    doFirst { runDir.mkdirs() }
+    // -Pswiftload.harnessStats=false times the harnesses without debug stats (and skips the hit count checks)
+    systemProperty('swiftload.debugStats', (project.findProperty('swiftload.harnessStats') ?: 'true').toString())
+    systemProperty('swiftload.fastWrite', 'true')
+    // Whole-world tests: -Pswiftload.testworld=runs/testworlds/swiftload-test
+    if (project.hasProperty('swiftload.testworld')) {
+        systemProperty('swiftload.testworld', rootProject.file(project.property('swiftload.testworld')).absolutePath)
+        outputs.upToDateWhen { false }
+    }
+    testLogging {
+        events 'failed', 'skipped', 'standard_out'
+        exceptionFormat = 'full'
+        showStandardStreams = true
+    }
+}
+
+loom {
+    def aw = project(':common').file("src/main/resources/${mod_id}.accesswidener")
+    if (aw.exists()) {
+        accessWidenerPath.set(aw)
+    }
+    runs {
+        client {
+            client()
+            setConfigName('Fabric Client')
+            // -Pswiftload.quickPlay=<world in runs/client/saves> opens that world directly
+            if (project.hasProperty('swiftload.quickPlay')) {
+                programArgs('--quickPlaySingleplayer', project.property('swiftload.quickPlay').toString())
+            }
+            ideConfigGenerated(true)
+            runDir('runs/client')
+        }
+        server {
+            server()
+            setConfigName('Fabric Server')
+            // -Pswiftload.serverArgs='--forceUpgrade' passes arguments to the server
+            if (project.hasProperty('swiftload.serverArgs')) {
+                programArgs(*project.property('swiftload.serverArgs').toString().split(' '))
+            }
+            ideConfigGenerated(true)
+            runDir('runs/server')
+        }
+    }
+}
+
+// Other mods for compatibility runs and tests, never in the jar: -Pswiftload.fabricMods=lithium,c2me
+repositories {
+    exclusiveContent {
+        forRepository {
+            maven {
+                name = 'Modrinth'
+                url = 'https://api.modrinth.com/maven'
+            }
+        }
+        filter {
+            includeGroup 'maven.modrinth'
+        }
+    }
+}
+
+def devMods = [
+        // Modrinth version ids
+        fabricapi      : 'maven.modrinth:fabric-api:v2j28coa',        // 0.162.0+26.3, for mods that need it
+        chunky         : 'maven.modrinth:chunky:4Eotm6ov',            // 1.5.3, needs fabricapi
+        lithium        : 'maven.modrinth:lithium:xS0Q8LSi',           // mc26.3-0.26.2-fabric
+        c2me           : 'maven.modrinth:c2me-fabric:ODMLK8M9',       // 0.4.2-alpha.0.90+26.3
+        moonrise       : 'maven.modrinth:moonrise-opt:5WWnR77M',      // 1.2.0+61c1328 (breaks c2me)
+        scalablelux    : 'maven.modrinth:scalablelux:g4eqNSKd',       // 0.3.0-alpha.0.6+26.3
+        ferritecore    : 'maven.modrinth:ferrite-core:d5ddUdiB',      // 9.0.0-fabric
+        sodium         : 'maven.modrinth:sodium:v4PSXean',            // mc26.3-0.9.3-alpha.1-fabric
+        distanthorizons: 'maven.modrinth:distanthorizons:TGgEbP9A',   // 3.3.4-26.3
+        fastquit       : 'maven.modrinth:fastquit:ZZ5dfboC',          // 3.1.5+mc26.2 (declares 26.3), needs clothconfig + fabricapi
+        clothconfig    : 'maven.modrinth:cloth-config:fg2uyxOW',      // 26.3.159+fabric
+]
+def requestedDevMods = (project.findProperty('swiftload.fabricMods') ?: '').toString().split(',')*.trim().findAll { it }
+dependencies {
+    requestedDevMods.each { name ->
+        if (!devMods.containsKey(name)) {
+            throw new GradleException("Unknown dev mod '${name}', known: ${devMods.keySet()}")
+        }
+        runtimeOnly(devMods[name])
+    }
+}
+
+// Implement mcgradleconventions loader attribute
+def loaderAttribute = Attribute.of('io.github.mcgradleconventions.loader', String)
+['apiElements', 'runtimeElements', 'sourcesElements', 'javadocElements', 'includeInternal', 'modCompileClasspath'].each { variant ->
+    configurations.named(variant) {
+        attributes {
+            attribute(loaderAttribute, 'fabric')
+        }
+    }
+}
+sourceSets.configureEach {
+    [it.compileClasspathConfigurationName, it.runtimeClasspathConfigurationName].each { variant ->
+        configurations.named(variant) {
+            attributes {
+                attribute(loaderAttribute, 'fabric')
+            }
+        }
+    }
+}

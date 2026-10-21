@@ -1,0 +1,44 @@
+name: natives
+
+# The shipped libdeflate builds rebuild to the same bytes, and load on every platform
+on:
+  push:
+    paths:
+      - 'natives/**'
+      - 'common/src/main/resources/natives/**'
+      - 'common/src/main/resources/io/github/ragamuffincat/swiftload/natives/**'
+      - 'common/src/main/java/io/github/ragamuffincat/swiftload/natives/**'
+      - 'common/src/test/java/io/github/ragamuffincat/swiftload/natives/**'
+      - 'common/src/bridge/**'
+      - '.github/workflows/natives.yml'
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  reproducible:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Rebuild libdeflate for all six targets from source
+        run: OUT="$RUNNER_TEMP/natives" ./natives/build-libdeflate.sh
+      - name: Compare with the committed binaries
+        run: |
+          diff <(grep sha256 common/src/main/resources/natives/natives.properties) \
+               <(grep sha256 "$RUNNER_TEMP/natives/natives.properties")
+          echo "All shipped binaries are reproducible."
+
+  load:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, windows-2025, windows-11-arm, macos-15, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '25'
+      - name: Load the bundled library for this platform and run the natives tests
+        shell: bash
+        run: ./natives/test-natives.sh

@@ -1,0 +1,80 @@
+plugins {
+    id 'multiloader-common'
+    id 'net.neoforged.moddev'
+}
+
+neoForge {
+    neoFormVersion = neo_form_version
+    // Automatically enable AccessTransformers if the file exists
+    def at = file('src/main/resources/META-INF/accesstransformer.cfg')
+    if (at.exists()) {
+        accessTransformers.from(at.absolutePath)
+    }
+}
+
+dependencies {
+    // The versions both loaders bundle
+    compileOnly('net.fabricmc:sponge-mixin:0.17.4+mixin.0.8.7')
+    compileOnly(annotationProcessor('io.github.llamalad7:mixinextras-common:0.5.5'))
+
+    testImplementation(platform('org.junit:junit-bom:5.14.4'))
+    testImplementation('org.junit.jupiter:junit-jupiter')
+    testRuntimeOnly('org.junit.platform:junit-platform-launcher')
+}
+
+// Unit tests use Minecraft's NBT and palette classes
+neoForge.addModdingDependenciesTo(sourceSets.test)
+
+tasks.named('test', Test) {
+    useJUnitPlatform()
+    // Same grant as the vanilla launcher
+    jvmArgs('--enable-native-access=ALL-UNNAMED')
+    // Minecraft classes log to ./logs
+    def runDir = layout.buildDirectory.dir('test-run').get().asFile
+    workingDir = runDir
+    doFirst { runDir.mkdirs() }
+    systemProperty('swiftload.commonDir', projectDir.absolutePath)
+    // Deeper NBT fuzzing: -Pswiftload.fuzz=2000
+    if (project.hasProperty('swiftload.fuzz')) {
+        systemProperty('swiftload.fuzz', project.property('swiftload.fuzz'))
+    }
+    testLogging {
+        events 'failed', 'skipped'
+        exceptionFormat = 'full'
+    }
+}
+
+configurations {
+    commonJava {
+        canBeResolved = false
+        canBeConsumed = true
+    }
+    commonResources {
+        canBeResolved = false
+        canBeConsumed = true
+    }
+}
+
+artifacts {
+    commonJava sourceSets.main.java.sourceDirectories.singleFile
+    commonResources sourceSets.main.resources.sourceDirectories.singleFile
+}
+
+// Implement mcgradleconventions loader attribute
+def loaderAttribute = Attribute.of('io.github.mcgradleconventions.loader', String)
+['apiElements', 'runtimeElements', 'sourcesElements', 'javadocElements'].each { variant ->
+    configurations.named(variant) {
+        attributes {
+            attribute(loaderAttribute, 'common')
+        }
+    }
+}
+sourceSets.configureEach {
+    [it.compileClasspathConfigurationName, it.runtimeClasspathConfigurationName].each { variant ->
+        configurations.named(variant) {
+            attributes {
+                attribute(loaderAttribute, 'common')
+            }
+        }
+    }
+}

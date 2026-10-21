@@ -1,0 +1,21 @@
+* text eol=lf
+*.bat text eol=crlf
+*.gradle text eol=crlf
+*.java text eol=lf
+*.cfg text eol=lf
+*.patch text eol=lf
+
+*.so binary
+*.dylib binary
+*.dll binary
+*.bin binary
+*.jar binary
+*.png binary
+*.gif binary
+*.exe binary
+*.zip binary
+*.jks binary
+*.ogg binary
+*.mca binary
+*.dat binary
+*.nbt binary

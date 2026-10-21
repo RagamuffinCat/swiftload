@@ -1,0 +1,128 @@
+plugins {
+    id 'multiloader-loader'
+    id 'net.neoforged.moddev'
+}
+
+neoForge {
+    version = neoforge_version
+    // Automatically enable NeoForge AccessTransformers if the file exists
+    def at = project(':common').file('src/main/resources/META-INF/accesstransformer.cfg')
+    if (at.exists()) {
+        accessTransformers.from(at.absolutePath)
+    }
+    runs {
+        configureEach {
+            ideName = "NeoForge ${it.name.capitalize()} (${project.path})" // unify run config names with Fabric
+        }
+        client {
+            client()
+            gameDirectory = this.mkdir(this.file('runs/client'))
+            // -Pswiftload.quickPlay=<world in runs/client/saves> opens that world directly
+            if (project.hasProperty('swiftload.quickPlay')) {
+                programArguments.addAll('--quickPlaySingleplayer', project.property('swiftload.quickPlay').toString())
+            }
+        }
+        server {
+            server()
+            this.file('runs/server').createParentDirectories()
+            gameDirectory = this.mkdir(this.file('runs/server'))
+            // -Pswiftload.serverArgs='--forceUpgrade' passes arguments to the server
+            if (project.hasProperty('swiftload.serverArgs')) {
+                programArguments.addAll(project.property('swiftload.serverArgs').toString().split(' ') as List)
+            }
+        }
+    }
+    mods {
+        "${mod_id}" {
+            sourceSet sourceSets.main
+        }
+    }
+    // Tests run inside FML (junit-fml), so the mixins and NeoForge's patches apply
+    unitTest {
+        enable()
+        testedMod = mods."${mod_id}"
+    }
+}
+
+// Game tests, shared with :fabric
+sourceSets.test.java.srcDir(project(':common').file('src/gametest/java'))
+
+dependencies {
+    testImplementation(platform('org.junit:junit-bom:5.14.4'))
+    testImplementation('org.junit.jupiter:junit-jupiter')
+    testRuntimeOnly('org.junit.platform:junit-platform-launcher')
+}
+
+tasks.named('test', Test) {
+    useJUnitPlatform()
+    // Otherwise C2 replaces hot implicit exceptions with ones without a message
+    jvmArgs('--enable-native-access=ALL-UNNAMED', '-XX:-OmitStackTraceInFastThrow')
+    maxHeapSize = '3G'
+    // -Pswiftload.harnessStats=false times the harnesses without debug stats (and skips the hit count checks)
+    systemProperty('swiftload.debugStats', (project.findProperty('swiftload.harnessStats') ?: 'true').toString())
+    systemProperty('swiftload.fastWrite', 'true')
+    // Whole-world tests: -Pswiftload.testworld=runs/testworlds/swiftload-test
+    if (project.hasProperty('swiftload.testworld')) {
+        systemProperty('swiftload.testworld', rootProject.file(project.property('swiftload.testworld')).absolutePath)
+        outputs.upToDateWhen { false }
+    }
+    testLogging {
+        events 'failed', 'skipped', 'standard_out'
+        exceptionFormat = 'full'
+        showStandardStreams = true
+    }
+}
+
+// Other mods for compatibility runs and tests, never in the jar: -Pswiftload.neoforgeMods=chunky,lithium
+repositories {
+    exclusiveContent {
+        forRepository {
+            maven {
+                name = 'Modrinth'
+                url = 'https://api.modrinth.com/maven'
+            }
+        }
+        filter {
+            includeGroup 'maven.modrinth'
+        }
+    }
+}
+
+def devMods = [
+        // Modrinth version ids
+        chunky         : 'maven.modrinth:chunky:EyCqftOK',            // 1.5.4
+        lithium        : 'maven.modrinth:lithium:1rb9wI5K',           // mc26.3-0.26.2-neoforge
+        moonrise       : 'maven.modrinth:moonrise-opt:wUkjiVfB',      // 1.2.0+61c1328
+        scalablelux    : 'maven.modrinth:scalablelux:QEqBp5LZ',       // 0.3.0-alpha.0.17+26.3
+        ferritecore    : 'maven.modrinth:ferrite-core:LtVvw4uS',      // 9.0.0-neoforge
+        sodium         : 'maven.modrinth:sodium:NM9w06Kr',            // mc26.3-0.9.3-alpha.1-neoforge
+        distanthorizons: 'maven.modrinth:distanthorizons:TGgEbP9A',   // 3.3.4-26.3
+]
+def requestedDevMods = (project.findProperty('swiftload.neoforgeMods') ?: '').toString().split(',')*.trim().findAll { it }
+dependencies {
+    requestedDevMods.each { name ->
+        if (!devMods.containsKey(name)) {
+            throw new GradleException("Unknown dev mod '${name}', known: ${devMods.keySet()}")
+        }
+        runtimeOnly(devMods[name])
+    }
+}
+
+// Implement mcgradleconventions loader attribute
+def loaderAttribute = Attribute.of('io.github.mcgradleconventions.loader', String)
+['apiElements', 'runtimeElements', 'sourcesElements', 'javadocElements'].each { variant ->
+    configurations.named(variant) {
+        attributes {
+            attribute(loaderAttribute, 'neoforge')
+        }
+    }
+}
+sourceSets.configureEach {
+    [it.compileClasspathConfigurationName, it.runtimeClasspathConfigurationName, it.getTaskName(null, 'jarJar')].each { variant ->
+        configurations.named(variant) {
+            attributes {
+                attribute(loaderAttribute, 'neoforge')
+            }
+        }
+    }
+}
